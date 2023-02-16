@@ -39,7 +39,6 @@ URLS = {
 	DEBTS: "betal",
 	LOGOUT: "log"
 	}
-TITLE_STRS = {LOGGED_IN: "logget ind", MY_PAGES: "user profile"}
 
 HEADERS = {
 	"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
@@ -107,10 +106,9 @@ class library:
 		return BS(r.text, "html.parser")
 
 	# Private
-	# Search the title for a string in the list of "title" strings
-	# Given soup and a key for the string
-	def _titleInSoup(self, soup, key):
-		return TITLE_STRS[key] in soup.title.string.lower()
+	# Search the title for a string
+	def _titleInSoup(self, soup, string):
+		return string.lower() in soup.title.string.lower()
 
 	# Private
 	# Convert ex. "22. maj 2023" to a datetime object
