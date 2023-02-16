@@ -56,15 +56,28 @@ class library:
 	session.headers = HEADERS
 
 	baseUrl = None			# The URL to the library
-	loggedIn = False
-	libraryName = None
-	user = None
+	loggedIn = False		# Boolean
+	libraryName = None		# Name of the Library/Municipality
+	user = None				# Object of libraryUser
 
+	# Required:
+	# userId: (CPR-number) or Loaner-ID
+	# pincode: Pincode
+	# Optional, at least of must be present:
+	# url, URL to your local library OR
+	# libraryName, name of the Library/Municipality
 	def __init__(self, userId: str, pincode: str, url = None, libraryName = None):
+		# Create a libraryUser
 		self.user = libraryUser(userId=userId, pincode=pincode)
+
+		# If we have stated a URL, store it as baseUrl
 		if url:
 			self.baseUrl = url
+
+		# No Url, but libraryName
 		elif libraryName:
+			# Fetch the "Fallback" library.
+			# Any library will do, we just need a page with all the libraries stored in a <script>
 			r = self.session.get(URLS["FALLBACK"] + URLS["LOGIN_PAGE"])
 			soup = BS(r.text, "html.parser")
 
@@ -74,11 +87,47 @@ class library:
 			# Loop the "Folk" libraries, search for our Library name
 			for lib in libraries["folk"]:
 				if lib["name"].lower() == libraryName.lower():
-					# Extract the baseUrl and return it
+					# Extract the baseUrl and store it as baseUrl
 					p = re.compile("^.+?[^\/:](?=[?\/]|$)")
 					m = p.match(lib["registrationUrl"])
 					if m:
 						self.baseUrl = m.group()
+
+	# Private
+	# GET / POST a webpage, returned as soup
+	def _fetchPage(self, url = str, payload = None):
+		# If payload, use POST
+		if payload:
+			r = self.session.post(url, data = payload)
+		
+		# else use GET
+		else:
+			r = self.session.get(url)
+
+		# Return HTML soup
+		return BS(r.text, "html.parser")
+
+	# Private
+	# Search the title for a string in the list of "title" string
+	# Given soup and a key for the string
+	def _titleInSoup(self, soup, key):
+		return TITLE_STRS[key] in soup.title.string.lower()
+
+	# Private
+	# Convert ex. "22. maj 2023" to a datetime object
+	def _getDatetime(self, date, format = "%d. %b %Y"):
+		# Split the string by " "
+		d, m, y = date.split(" ")
+		# Cut the name of the month to the first 3 chars
+		m = m[:3]
+		# Change the few danish month to english
+		match m.lower():
+			case "maj":
+				m = "may"
+			case "okt":
+				m = "oct"
+		# Return the datetime
+		return datetime.strptime(f"{d} {m} {y}", format)
 
 	def login(self):
 		# Test if we are logged in
@@ -113,38 +162,18 @@ class library:
 		
 		return self.loggedIn
 
-	def _fetchPage(self, url = str, payload = None):
-		if payload:
-			r = self.session.post(url, data = payload)
-		else:
-			r = self.session.get(url)
-		return BS(r.text, "html.parser")
-
-	def _titleInSoup(self, soup, key):
-		return TITLE_STRS[key] in soup.title.string.lower()
-
-	def _getDatetime(self, date, format = "%d. %b %Y"):
-		d, m, y = date.split(" ")
-		m = m[:3]
-		match m.lower():
-			case "maj":
-				m = "may"
-			case "okt":
-				m = "oct"
-		return datetime.strptime(f"{d} {m} {y}", format)
-
+	# From the users mainpage, we are able to load the URLs for the subpages
 	def fetchUserLinks(self):
-
-		def exctractNumber(a_status):
-			return a_status.parent.find_all("span")[-1].string
-
 		# Fetch "My view"
 		soup = self._fetchPage(self.baseUrl + URLS[MY_PAGES])
-		# Find all <a> containing "user" in the href
+
+		# Find all <a> within a specific <ul>
 		for userPage in soup.select_one("ul[class=main-menu-third-level]").find_all("a"):
 			# Only work on URLs not allready in our dict
 			if not userPage["href"] in URLS.values():
-				# Search for value, return the key and update the URLS
+				# Search for key and value
+				# if value is in our list
+				# update the list at the key
 				for key, value in URLS.items():
 					if value in userPage.text:
 						URLS[key] = userPage["href"]
@@ -152,30 +181,32 @@ class library:
 		# Fetch usefull user states - OBSOLETE WHEN FETCHING DETAILS
 		for a_status in soup.select_one("ul[class='list-links specials']").find_all("a"):
 			if URLS[DEBTS] in a_status["href"]:
-				self.user.debts = exctractNumber(a_status)
-		
+				self.user.debts = a_status.parent.find_all("span")[-1].string
+	
+	# Get information on the user
 	def fetchUserInfo(self):
-		r = self.session.get(self.baseUrl + URLS[USER_PROFILE])
-		soup = BS(r.text, "html.parser")
+		# Fetch the user profile page
+		soup = self._fetchPage(self.baseUrl + URLS[USER_PROFILE])
+
+		# From the <div> with a class containing the given name
 		for fields in soup.select_one("div[class=content]").select("div[class*=field-name]"):
 			# Crappy HTML page....
 			# Find the fieldName tag
 			fieldName = fields.select_one("div[class=field-label]")
 			# Get the parent of the fieldName tag and extract the value from the sub div
-			fieldLine = fieldName.parent.select_one("div[class=field-items]").div
+			fieldValue = fieldName.parent.select_one("div[class=field-items]").div
 			# Remove <br>
-			for e in fieldLine.findAll('br'):
+			for e in fieldValue.findAll('br'):
 				e.extract()
-			# Extract the fieldName from the fieldName tag
-			fieldName = fieldName.string.lower()
 
-			match fieldName:
+			# Find the correct place for the field
+			match fieldName.string.lower():
 				case "navn":
-					self.user.name = fieldLine.string
+					self.user.name = fieldValue.string
 				case "adresse":
-					self.user.address = fieldLine.contents
+					self.user.address = fieldValue.contents
 
-		# Find the <form>, extract info
+		# Find the correct <form>, extract info
 		form = soup.select_one(f"form[action='{URLS[USER_PROFILE]}']")
 		self.user.phone = form.select_one("input[name*='phone]']")["value"]
 		self.user.phoneNotify = int(form.select_one("input[name*='phone_notification']")["value"]) == 1
@@ -186,12 +217,14 @@ class library:
 				self.user.pickupLibrary = library.string
 				break
 
+	# Get the loans with all possible details
 	def fetchLoans(self):
-		r = self.session.get(self.baseUrl + URLS[LOANS])
-		soup = BS(r.text, "html.parser")
+		# Fecth the loans page
+		soup = self._fetchPage(self.baseUrl + URLS[LOANS])
 
-		materials = soup.select("div[class*='material-item']")
-		for material in materials:
+		# From the <div> with the materials
+		for material in soup.select("div[class*='material-item']"):
+			# Create an instance of libraryLoan
 			loan = libraryLoan()
 
 			# Renewable
@@ -212,10 +245,8 @@ class library:
 				value = li.select_one("div[class=item-information-data]").string
 				match li["class"][-1]:
 					case "loan-date":
-						d, m, y = value.split(" ")
 						loan.loanDate = self._getDatetime(value)
 					case "expire-date":
-						d, m, y = value.split(" ")
 						loan.expireDate = self._getDatetime(value)
 					case "material-number":
 						loan.id = value
@@ -223,20 +254,23 @@ class library:
 			# Add the loan to the stack
 			self.user.loans.append(loan)
 
+		# Sort the loans by expireDate and the Title
 		self.user.loans.sort(key=lambda x: (x.expireDate, x.title))
+		# If any loans, set the nextExpireDate to the first loan in the list
 		if self.user.loans:
 			self.user.nextExpireDate = self.user.loans[0].expireDate
 
-		print(self.user.nextExpireDate)
-
+	# Get the current reservations
 	def fetchReservations(self):
-		r = self.session.get(self.baseUrl + URLS[RESERVATIONS])
-		soup = BS(r.text, "html.parser")
+		# Fecth the reservations page
+		soup = self._fetchPage(self.baseUrl + URLS[RESERVATIONS])
 
-		materials = soup.select("div[class*='material-item']")
-		for material in materials:
+		# From the <div> with the materials
+		for material in soup.select("div[class*='material-item']"):
+			# Create a instance of libraryReservation
 			reservation = libraryReservation()
 
+			# Fill the reservation with info
 			reservation.id = material.input["value"]
 			reservation.url = self.baseUrl + material.a["href"] if material.a else ""
 			reservation.coverUrl = material.img["src"] if material.img else ""
@@ -244,8 +278,11 @@ class library:
 			reservation.title = material.h3.string
 			reservation.creators = material.select_one("div[class=item-creators]").string if material.select_one("div[class=item-creators]") else ""
 
+			# Loop the <li> of the reservation
 			for li in material.find_all("li"):
+				# Extract the value
 				value = li.select_one("div[class=item-information-data]").string
+				# Match on the last element of the Class in <li>
 				match li["class"][-1]:
 					case "expire-date":
 						reservation.expireDate = self._getDatetime(value)
@@ -258,9 +295,6 @@ class library:
 
 			# Add the reservation to the stack
 			self.user.reservations.append(reservation)
-
-#		with open(f"response.html", mode="w", encoding="utf-8") as resp_file:
-#			resp_file.write(r.text)
 
 class libraryUser:
 	userInfo = None
