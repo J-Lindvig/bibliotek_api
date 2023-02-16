@@ -12,7 +12,6 @@ import json
 import requests
 import re
 
-
 DEBUG = True
 
 LOGGED_IN = "logget ind"
@@ -30,15 +29,15 @@ URLS = {
 	"FALLBACK": "https://fmbib.dk",
 	"LOGIN_PAGE": "/adgangsplatformen/login?destination=ding_frontpage",
 	MY_PAGES: "/user/me/view",
-	LOANS_OVERDUE: "Overskredne lån",
-	LOANS: "Lån",
-	RESERVATIONS_READY: "Reserveringer klar til afhentning",
-	RESERVATIONS: "Reserveringer i kø",
-#	CHECKLIST: "Min liste",				# JS
-#	SEARCHES: "Mine gemte søgninger",	# JS
-	USER_PROFILE: "Brugerprofil",
-	DEBTS: "Betal gebyrer",
-	LOGOUT: "Log ud"
+	LOANS_OVERDUE: "over",
+	LOANS: "lån",
+	RESERVATIONS_READY: "reserveringer klar",
+	RESERVATIONS: "reserveringer i",
+#	CHECKLIST: "min liste",				# JS
+#	SEARCHES: "mine gemte",				# JS
+	USER_PROFILE: "bruger",
+	DEBTS: "betal",
+	LOGOUT: "log"
 	}
 TITLE_STRS = {LOGGED_IN: "logget ind", MY_PAGES: "user profile"}
 
@@ -108,7 +107,7 @@ class library:
 		return BS(r.text, "html.parser")
 
 	# Private
-	# Search the title for a string in the list of "title" string
+	# Search the title for a string in the list of "title" strings
 	# Given soup and a key for the string
 	def _titleInSoup(self, soup, key):
 		return TITLE_STRS[key] in soup.title.string.lower()
@@ -137,6 +136,7 @@ class library:
 
 		if not self.loggedIn:
 			# Fetch the loginpage and prepare a soup
+			# Must make a manual GET, since we are using "r" later
 			r = self.session.get(self.baseUrl + URLS["LOGIN_PAGE"])
 			soup = BS(r.text, "html.parser")
 
@@ -152,9 +152,9 @@ class library:
 				else:
 					payload[input["name"]] = input["value"]
 
-			# Send the payload a POST and prepare a new soup
-			r = self.session.post(form["action"].replace("/login", r.url), payload)
-			soup = BS(r.text, "html.parser")
+			# Send the payload as POST and prepare a new soup
+			# Use the URL from "r" since we have been directed
+			soup = self._fetchPage(form["action"].replace("/login", r.url), payload)
 
 			# Set loggedIn
 			self.loggedIn = self._titleInSoup(soup, LOGGED_IN)
@@ -168,15 +168,15 @@ class library:
 		soup = self._fetchPage(self.baseUrl + URLS[MY_PAGES])
 
 		# Find all <a> within a specific <ul>
-		for userPage in soup.select_one("ul[class=main-menu-third-level]").find_all("a"):
+		for url in soup.select_one("ul[class=main-menu-third-level]").find_all("a"):
 			# Only work on URLs not allready in our dict
-			if not userPage["href"] in URLS.values():
+			if not url["href"] in URLS.values():
 				# Search for key and value
-				# if value is in our list
+				# if the text of the URL starts with our value
 				# update the list at the key
 				for key, value in URLS.items():
-					if value in userPage.text:
-						URLS[key] = userPage["href"]
+					if url.text.lower().startswith(value):
+						URLS[key] = url["href"]
 
 		# Fetch usefull user states - OBSOLETE WHEN FETCHING DETAILS
 		for a_status in soup.select_one("ul[class='list-links specials']").find_all("a"):
